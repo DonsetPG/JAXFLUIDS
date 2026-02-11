@@ -1,0 +1,19 @@
+{
+  "case_setup": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/case_setup_viq_re200.json",
+  "numerical_setup": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/numerical_setup.json",
+  "sim_time": 0.02,
+  "dt_used_in_feed_forward": 0.002597640183740814,
+  "total_steps": 8,
+  "outer_steps": 4,
+  "inner_steps": 2,
+  "num_iters": 1,
+  "learning_rate": 0.001,
+  "max_step_norm": 0.01,
+  "ring_r_min": 0.7,
+  "ring_r_max": 1.3,
+  "bezier_samples": 180,
+  "jax_backend": "cpu",
+  "jax_devices": [
+    "TFRT_CPU_0"
+  ]
+}

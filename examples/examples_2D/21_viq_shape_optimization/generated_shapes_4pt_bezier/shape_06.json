@@ -1,0 +1,23 @@
+{
+  "shape_id": "shape_06",
+  "control_points": [
+    [
+      0.8060668272076537,
+      0.00250598481561351
+    ],
+    [
+      -0.14067323454023942,
+      0.9400912392784934
+    ],
+    [
+      -0.9207164398154326,
+      0.05114710008958253
+    ],
+    [
+      0.03322039824788951,
+      -0.8454354541664639
+    ]
+  ],
+  "levelset_h5": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/generated_shapes_4pt_bezier/shape_06_levelset.h5",
+  "preview_png": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/generated_shapes_4pt_bezier/shape_06.png"
+}

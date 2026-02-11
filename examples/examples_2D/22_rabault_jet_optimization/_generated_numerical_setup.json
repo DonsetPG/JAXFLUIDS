@@ -1,0 +1,79 @@
+{
+  "conservatives": {
+    "halo_cells": 5,
+    "time_integration": {
+      "integrator": "RK3",
+      "CFL": 0.4
+    },
+    "convective_fluxes": {
+      "convective_solver": "GODUNOV",
+      "godunov": {
+        "riemann_solver": "HLLC",
+        "signal_speed": "EINFELDT",
+        "reconstruction_stencil": "WENO5-Z-ADAP",
+        "reconstruction_variable": "PRIMITIVE"
+      }
+    },
+    "dissipative_fluxes": {
+      "reconstruction_stencil": "CENTRAL4-ADAP",
+      "derivative_stencil_center": "CENTRAL4-ADAP",
+      "derivative_stencil_face": "CENTRAL4-ADAP"
+    },
+    "positivity": {
+      "is_interpolation_limiter": true
+    }
+  },
+  "levelset": {
+    "halo_cells": 2,
+    "model": "FLUID-SOLID",
+    "interface_flux": {
+      "method": "INTERPOLATION",
+      "interpolation_dh": 1.0
+    },
+    "geometry": {
+      "derivative_stencil_normal": "CENTRAL4",
+      "subcell_reconstruction": false
+    },
+    "extension": {
+      "primitives": {
+        "method": "ITERATIVE",
+        "iterative": {
+          "CFL": 0.5,
+          "steps": 20,
+          "residual_threshold": 1e-05,
+          "is_jaxwhileloop": false
+        }
+      }
+    },
+    "mixing": {
+      "conservatives": {
+        "volume_fraction_threshold": 0.1,
+        "mixing_targets": 1,
+        "is_interpolate_invalid_cells": false
+      }
+    }
+  },
+  "active_physics": {
+    "is_convective_flux": true,
+    "is_viscous_flux": true,
+    "is_heat_flux": false,
+    "is_volume_force": false,
+    "is_surface_tension": false,
+    "is_viscous_heat_production": true
+  },
+  "active_forcings": {
+    "is_temperature_forcing": false,
+    "is_custom_forcing": true
+  },
+  "precision": {
+    "is_double_precision_compute": true,
+    "is_double_precision_output": true
+  },
+  "output": {
+    "derivative_stencil": "CENTRAL4",
+    "logging": {
+      "frequency": 100
+    },
+    "is_xdmf": true
+  }
+}

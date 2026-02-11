@@ -1,0 +1,212 @@
+{
+  "objective": "mean_second_half(Cl/|Cd|)",
+  "differentiability_check": {
+    "epsilon": 0.03,
+    "directional_derivative_central_diff": -34.085545922485004,
+    "smoothness_indicator": 0.22335286184688286,
+    "delta_direction": [
+      [
+        1.0,
+        1.0
+      ],
+      [
+        -1.0,
+        -1.0
+      ],
+      [
+        -1.0,
+        1.0
+      ],
+      [
+        1.0,
+        -1.0
+      ]
+    ]
+  },
+  "gradient_ascent_step": {
+    "learning_rate": 0.08,
+    "reward_before": 0.2877360281911657,
+    "reward_after": -0.22309577106439965,
+    "improvement": -0.5108317992555653,
+    "theta_before": [
+      [
+        1.05,
+        0.0
+      ],
+      [
+        0.05,
+        1.0
+      ],
+      [
+        -1.0,
+        0.1
+      ],
+      [
+        0.0,
+        -0.95
+      ]
+    ],
+    "theta_after": [
+      [
+        -0.6809690371001555,
+        -1.107375803650629
+      ],
+      [
+        0.7767220789105996,
+        1.0424503883316414
+      ],
+      [
+        0.7141138078606484,
+        -1.086297136801324
+      ],
+      [
+        -1.0891737978808496,
+        0.7097185625371482
+      ]
+    ],
+    "reward_after_small_lr_0.003": -0.021537223254390583,
+    "improvement_small_lr_0.003": -0.3092732514455563
+  },
+  "evaluations": {
+    "base": {
+      "tag": "base",
+      "reward_mean_second_half": 0.2877360281911657,
+      "mean_cd_second_half": 0.7028447713726649,
+      "mean_cl_second_half": 0.1737165194334465,
+      "output_path": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/results/viq_opt_base",
+      "shape_preview_png": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/base/shape.png",
+      "shape_levelset_h5": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/base/levelset.h5",
+      "coeff_timeseries_csv": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/base/coeff_timeseries.csv",
+      "control_points": [
+        [
+          1.05,
+          0.0
+        ],
+        [
+          0.05,
+          1.0
+        ],
+        [
+          -1.0,
+          0.1
+        ],
+        [
+          0.0,
+          -0.95
+        ]
+      ]
+    },
+    "plus": {
+      "tag": "plus",
+      "reward_mean_second_half": -0.5114774876365017,
+      "mean_cd_second_half": 1.2641836226930365,
+      "mean_cl_second_half": -0.6169843457224357,
+      "output_path": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/results/viq_opt_plus",
+      "shape_preview_png": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/plus/shape.png",
+      "shape_levelset_h5": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/plus/levelset.h5",
+      "coeff_timeseries_csv": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/plus/coeff_timeseries.csv",
+      "control_points": [
+        [
+          1.08,
+          0.03
+        ],
+        [
+          0.020000000000000004,
+          0.97
+        ],
+        [
+          -1.03,
+          0.13
+        ],
+        [
+          0.03,
+          -0.98
+        ]
+      ]
+    },
+    "minus": {
+      "tag": "minus",
+      "reward_mean_second_half": 1.5336552677125987,
+      "mean_cd_second_half": 0.5454692935234305,
+      "mean_cl_second_half": 0.6006109851891365,
+      "output_path": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/results/viq_opt_minus",
+      "shape_preview_png": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/minus/shape.png",
+      "shape_levelset_h5": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/minus/levelset.h5",
+      "coeff_timeseries_csv": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/minus/coeff_timeseries.csv",
+      "control_points": [
+        [
+          1.02,
+          -0.03
+        ],
+        [
+          0.08,
+          1.03
+        ],
+        [
+          -0.97,
+          0.07
+        ],
+        [
+          -0.03,
+          -0.9199999999999999
+        ]
+      ]
+    },
+    "after_step_1": {
+      "tag": "after_step_1",
+      "reward_mean_second_half": -0.22309577106439965,
+      "mean_cd_second_half": 4.623525001943834,
+      "mean_cl_second_half": -1.0128326535741212,
+      "output_path": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/results/viq_opt_after_step_1",
+      "shape_preview_png": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/after_step_1/shape.png",
+      "shape_levelset_h5": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/after_step_1/levelset.h5",
+      "coeff_timeseries_csv": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/after_step_1/coeff_timeseries.csv",
+      "control_points": [
+        [
+          -0.6809690371001555,
+          -1.107375803650629
+        ],
+        [
+          0.7767220789105996,
+          1.0424503883316414
+        ],
+        [
+          0.7141138078606484,
+          -1.086297136801324
+        ],
+        [
+          -1.0891737978808496,
+          0.7097185625371482
+        ]
+      ]
+    },
+    "after_step_1_small_lr": {
+      "tag": "after_step_1_small_lr",
+      "reward_mean_second_half": -0.021537223254390583,
+      "mean_cd_second_half": 1.3795077830903764,
+      "mean_cl_second_half": -0.04024062719253885,
+      "output_path": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/results/viq_opt_after_step_1_small_lr",
+      "shape_preview_png": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/after_step_1_small_lr/shape.png",
+      "shape_levelset_h5": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/after_step_1_small_lr/levelset.h5",
+      "coeff_timeseries_csv": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/after_step_1_small_lr/coeff_timeseries.csv",
+      "control_points": [
+        [
+          0.9477433622325451,
+          -0.10225663776745501
+        ],
+        [
+          0.15225663776745502,
+          1.102256637767455
+        ],
+        [
+          -0.897743362232545,
+          -0.002256637767455008
+        ],
+        [
+          -0.10225663776745501,
+          -0.847743362232545
+        ]
+      ]
+    }
+  }
+}

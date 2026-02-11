@@ -1,0 +1,28 @@
+{
+  "tag": "after_step_1",
+  "reward_mean_second_half": -0.22309577106439965,
+  "mean_cd_second_half": 4.623525001943834,
+  "mean_cl_second_half": -1.0128326535741212,
+  "output_path": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/results/viq_opt_after_step_1",
+  "shape_preview_png": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/after_step_1/shape.png",
+  "shape_levelset_h5": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/after_step_1/levelset.h5",
+  "coeff_timeseries_csv": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/optimization_4pt_bezier/after_step_1/coeff_timeseries.csv",
+  "control_points": [
+    [
+      -0.6809690371001555,
+      -1.107375803650629
+    ],
+    [
+      0.7767220789105996,
+      1.0424503883316414
+    ],
+    [
+      0.7141138078606484,
+      -1.086297136801324
+    ],
+    [
+      -1.0891737978808496,
+      0.7097185625371482
+    ]
+  ]
+}

@@ -1,0 +1,152 @@
+{
+  "general": {
+    "case_name": "rabault_jet_re100_nx440_ny82_qp0p010",
+    "end_time": 0.2,
+    "save_path": "./results",
+    "save_dt": 0.1
+  },
+  "domain": {
+    "x": {
+      "cells": 440,
+      "range": [
+        -2.0,
+        20.0
+      ]
+    },
+    "y": {
+      "cells": 82,
+      "range": [
+        -2.0,
+        2.1
+      ]
+    },
+    "z": {
+      "cells": 1,
+      "range": [
+        0.0,
+        1.0
+      ]
+    },
+    "decomposition": {
+      "split_x": 1,
+      "split_y": 1,
+      "split_z": 1
+    }
+  },
+  "boundary_conditions": {
+    "primitives": {
+      "east": {
+        "type": "ZEROGRADIENT"
+      },
+      "west": {
+        "type": "DIRICHLET",
+        "primitives_callable": {
+          "rho": 1.0,
+          "u": "lambda y,t: 6.0 * (2.05 - (y - 0.05)) * (2.05 + (y - 0.05)) / (4.1**2)",
+          "v": 0.0,
+          "w": 0.0,
+          "p": 25.0
+        }
+      },
+      "north": {
+        "type": "WALL",
+        "wall_velocity_callable": {
+          "u": 0.0,
+          "v": 0.0,
+          "w": 0.0
+        }
+      },
+      "south": {
+        "type": "WALL",
+        "wall_velocity_callable": {
+          "u": 0.0,
+          "v": 0.0,
+          "w": 0.0
+        }
+      },
+      "top": {
+        "type": "INACTIVE"
+      },
+      "bottom": {
+        "type": "INACTIVE"
+      }
+    },
+    "levelset": {
+      "east": {
+        "type": "ZEROGRADIENT"
+      },
+      "west": {
+        "type": "ZEROGRADIENT"
+      },
+      "north": {
+        "type": "ZEROGRADIENT"
+      },
+      "south": {
+        "type": "ZEROGRADIENT"
+      },
+      "top": {
+        "type": "INACTIVE"
+      },
+      "bottom": {
+        "type": "INACTIVE"
+      }
+    }
+  },
+  "initial_condition": {
+    "primitives": {
+      "rho": 1.0,
+      "u": "lambda x,y: 6.0 * (2.05 - (y - 0.05)) * (2.05 + (y - 0.05)) / (4.1**2)",
+      "v": 0.0,
+      "w": 0.0,
+      "p": 25.0
+    },
+    "levelset": "lambda x,y: jnp.sqrt(x**2 + y**2) - 0.5"
+  },
+  "material_properties": {
+    "equation_of_state": {
+      "model": "IdealGas",
+      "specific_heat_ratio": 1.4,
+      "specific_gas_constant": 1.0
+    },
+    "transport": {
+      "dynamic_viscosity": {
+        "model": "CUSTOM",
+        "value": 0.01
+      },
+      "bulk_viscosity": 0.0,
+      "thermal_conductivity": {
+        "model": "CUSTOM",
+        "value": 0.0
+      }
+    }
+  },
+  "forcings": {
+    "custom_forcing": {
+      "rho": 0.0,
+      "u": "lambda x,y,t: 8 * (1.0 - jnp.exp(-t / 0.1)) * jnp.where(jnp.sqrt(x**2 + y**2) >= 0.5, 1.0, 0.0) * jnp.exp(-((jnp.sqrt(x**2 + y**2) - 0.5) / 0.03)**2) * ((0.01470255796400952) * (36) * jnp.where(jnp.abs(jnp.arctan2(y, x) - 1.570796326794897) <= 0.08726646259971647, jnp.cos(jnp.pi * (jnp.arctan2(y, x) - 1.570796326794897) / 0.1745329251994329), 0.0) + (-0.01470255796400952) * (36) * jnp.where(jnp.abs(jnp.arctan2(y, x) - -1.570796326794897) <= 0.08726646259971647, jnp.cos(jnp.pi * (jnp.arctan2(y, x) - -1.570796326794897) / 0.1745329251994329), 0.0)) * (x / (jnp.sqrt(x**2 + y**2) + 1.0e-12))",
+      "v": "lambda x,y,t: 8 * (1.0 - jnp.exp(-t / 0.1)) * jnp.where(jnp.sqrt(x**2 + y**2) >= 0.5, 1.0, 0.0) * jnp.exp(-((jnp.sqrt(x**2 + y**2) - 0.5) / 0.03)**2) * ((0.01470255796400952) * (36) * jnp.where(jnp.abs(jnp.arctan2(y, x) - 1.570796326794897) <= 0.08726646259971647, jnp.cos(jnp.pi * (jnp.arctan2(y, x) - 1.570796326794897) / 0.1745329251994329), 0.0) + (-0.01470255796400952) * (36) * jnp.where(jnp.abs(jnp.arctan2(y, x) - -1.570796326794897) <= 0.08726646259971647, jnp.cos(jnp.pi * (jnp.arctan2(y, x) - -1.570796326794897) / 0.1745329251994329), 0.0)) * (y / (jnp.sqrt(x**2 + y**2) + 1.0e-12))",
+      "w": 0.0,
+      "p": 0.0
+    }
+  },
+  "nondimensionalization_parameters": {
+    "density_reference": 1.0,
+    "length_reference": 1.0,
+    "velocity_reference": 1.0,
+    "temperature_reference": 1.0
+  },
+  "output": {
+    "primitives": [
+      "density",
+      "velocity",
+      "pressure"
+    ],
+    "levelset": [
+      "levelset",
+      "volume_fraction"
+    ],
+    "miscellaneous": [
+      "vorticity"
+    ]
+  }
+}

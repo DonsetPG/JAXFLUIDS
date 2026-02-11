@@ -1,0 +1,28 @@
+- Date: 2026-02-11
+- Context: Read and summarized three DRL+CFD papers in `papers_to_read/` to prepare JAX-differentiable replacements for DRL training.
+- Evidence: `rg --files papers_to_read` found `garnier.pdf`, `rabault.pdf`, `viq.pdf`; extracted text via `.venv_codex` + `pypdf`; key formulas recovered from source PDFs:
+  - `rabault.pdf`: `rt = -<CD>_T - 0.2|<CL>_T|` with two synthetic jets on a cylinder at `Re=100`.
+  - `viq.pdf`: baseline reward `rt = <Cl/|Cd|> - <Cl/|Cd|>_cyl`; degenerate one-step PPO for shape generation via constrained Bezier control points.
+  - `garnier.pdf`: review paper; section 3.7 reports two-cylinder placement optimization (small control cylinder near square main cylinder), including direct optimization and transfer learning over `Re=10,40,100`.
+- Decision: Use these papers as reference tasks, but replace DRL policy updates with direct differentiation through JAX CFD and gradient-based optimization over controls/design variables.
+- Next action: Build three minimal reproducible JAX environments mirroring the paper objectives (shape, jets, small-cylinder placement) and run one baseline forward simulation per case before gradient checks.
+
+- Date: 2026-02-11
+- Context: Implemented and ran first VIQ-like shape-optimization environment in JAXFluids (`examples/examples_2D/21_viq_shape_optimization`).
+- Evidence: Added case + numerical setups and runner script; executed simulation and postprocessed drag/lift:
+  - Run command: `cd examples/examples_2D/21_viq_shape_optimization && ../../../venvjax/bin/python run_viq_shape.py`
+  - Postprocess-only command: `SKIP_SIMULATION=1 ../../../venvjax/bin/python run_viq_shape.py`
+  - Outputs: `results/viq_shape_re200_baseline_v3/domain/*.h5`, `drag_lift_timeseries.csv`, `drag_lift_summary.json`, `drag_lift_coefficients.png`.
+  - Mean over second half (from summary): `Cd=1.3233`, `Cl=-0.8904`, `Cl/|Cd|=-0.7076`.
+- Decision: Keep this as baseline environment and force-extraction pipeline; use short horizon (`t_end=2.0`) for rapid iteration, then scale horizon once optimization loop is wired.
+- Next action: Add differentiability check wrt shape parameters and run first gradient-ascent step on `Cl/|Cd|`.
+
+- Date: 2026-02-11
+- Context: Added 4-point Bezier shape parameterization + differentiability/optimization scripts for VIQ environment.
+- Evidence:
+  - New geometry module: `examples/examples_2D/21_viq_shape_optimization/bezier_shape.py`.
+  - Generated 10 Bezier shapes via `generate_bezier_shapes.py` into `generated_shapes_4pt_bezier/` (`10` PNGs + `10` levelset `.h5` + manifest).
+  - Ran `optimize_bezier_shape_viq.py` with 4 CFD evaluations (`base`, `plus`, `minus`, `after_step_1`) and wrote `optimization_4pt_bezier/optimization_summary.json`.
+  - Differentiability check (central diff on reward `mean(Cl/|Cd|)`): directional derivative `-34.0855`, smoothness indicator `0.22335`.
+- Decision: Pipeline for optimizing 4 Bezier control points is functional; finite-difference gradients are noisy/nonlinear at current step size, requiring line search or trust region.
+- Next action: Replace one-shot SPSA step with bounded line-search / trust-region update and add replayable random seed + checkpointed candidate cache to avoid recomputing identical shapes.
