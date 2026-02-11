@@ -6,7 +6,7 @@ import csv
 import json
 import time
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -16,6 +16,48 @@ from jaxfluids import InitializationManager, InputManager, SimulationManager
 from jaxfluids.feed_forward.data_types import FeedForwardSetup
 
 from bezier_shape import render_shape_preview, write_levelset_h5
+
+
+def maybe_init_wandb(args: argparse.Namespace, run_config: Dict[str, Any], out_dir: Path):
+    if not args.use_wandb:
+        return None
+    try:
+        import wandb
+    except ImportError as exc:
+        raise RuntimeError(
+            "Weights & Biases logging requested but `wandb` is not installed. "
+            "Install it with: pip install wandb"
+        ) from exc
+
+    tags = [tag.strip() for tag in args.wandb_tags.split(",") if tag.strip()]
+    run = wandb.init(
+        project=args.wandb_project,
+        entity=args.wandb_entity or None,
+        name=args.wandb_run_name or None,
+        mode=args.wandb_mode,
+        tags=tags if tags else None,
+        dir=str(out_dir.resolve()),
+        config=run_config,
+    )
+    return run
+
+
+def make_wandb_iter_payload(row: Dict[str, Any], theta_np: np.ndarray) -> Dict[str, float]:
+    payload: Dict[str, float] = {
+        "reward": float(row["reward"]),
+        "drag": float(row["mean_cd_second_half"]),
+        "lift": float(row["mean_cl_second_half"]),
+        "mean_cd_second_half": float(row["mean_cd_second_half"]),
+        "mean_cl_second_half": float(row["mean_cl_second_half"]),
+        "grad_norm": float(row["grad_norm"]),
+        "step_norm": float(row["step_norm"]),
+        "wall_seconds": float(row["wall_seconds"]),
+        "sim_end_time": float(row["sim_end_time"]),
+    }
+    for i in range(4):
+        payload[f"control_point_{i}_x"] = float(theta_np[i, 0])
+        payload[f"control_point_{i}_y"] = float(theta_np[i, 1])
+    return payload
 
 
 def clamp_points_to_ring_jax(points: jax.Array, r_min: float, r_max: float) -> jax.Array:
@@ -238,6 +280,12 @@ def main() -> None:
     parser.add_argument("--bezier-samples", type=int, default=180)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--jit", action="store_true", help="JIT compile value+grad function.")
+    parser.add_argument("--use-wandb", action="store_true", help="Enable Weights & Biases logging.")
+    parser.add_argument("--wandb-project", default="jaxfluids-viq-shape-opt")
+    parser.add_argument("--wandb-entity", default="")
+    parser.add_argument("--wandb-run-name", default="")
+    parser.add_argument("--wandb-mode", choices=["online", "offline", "disabled"], default="online")
+    parser.add_argument("--wandb-tags", default="viq,shape,opt,differentiable")
     args = parser.parse_args()
 
     out_dir = Path(args.output_dir)
@@ -320,8 +368,15 @@ def main() -> None:
         "bezier_samples": args.bezier_samples,
         "jax_backend": jax.default_backend(),
         "jax_devices": [str(d) for d in jax.devices()],
+        "use_wandb": args.use_wandb,
+        "wandb_project": args.wandb_project,
+        "wandb_entity": args.wandb_entity,
+        "wandb_run_name": args.wandb_run_name,
+        "wandb_mode": args.wandb_mode,
+        "wandb_tags": args.wandb_tags,
     }
     (out_dir / "run_config.json").write_text(json.dumps(run_config, indent=2))
+    wandb_run = maybe_init_wandb(args, run_config, out_dir)
 
     history_csv = out_dir / "history.csv"
     with history_csv.open("w", newline="") as f:
@@ -401,6 +456,8 @@ def main() -> None:
                 ]
             )
         (iter_dir / "metrics.json").write_text(json.dumps(row, indent=2))
+        if wandb_run is not None:
+            wandb_run.log(make_wandb_iter_payload(row, theta_np), step=it)
         print(
             f"[iter {it:03d}] reward={row['reward']:.6f} "
             f"Cd={row['mean_cd_second_half']:.6f} Cl={row['mean_cl_second_half']:.6f} "
@@ -413,6 +470,14 @@ def main() -> None:
         "history": history,
     }
     (out_dir / "final_summary.json").write_text(json.dumps(final, indent=2))
+    if wandb_run is not None:
+        wandb_run.summary["final_theta"] = final["final_theta"]
+        wandb_run.summary["num_iters"] = len(history)
+        if history:
+            wandb_run.summary["final_reward"] = history[-1]["reward"]
+            wandb_run.summary["final_drag"] = history[-1]["mean_cd_second_half"]
+            wandb_run.summary["final_lift"] = history[-1]["mean_cl_second_half"]
+        wandb_run.finish()
     print(f"Saved optimization outputs to: {out_dir.resolve()}")
 
 

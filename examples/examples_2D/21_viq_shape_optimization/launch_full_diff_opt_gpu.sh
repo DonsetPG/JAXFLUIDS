@@ -14,6 +14,12 @@ cd "${SCRIPT_DIR}"
 : "${RING_R_MAX:=1.3}"
 : "${BEZIER_SAMPLES:=180}"
 : "${SEED:=0}"
+: "${USE_WANDB:=0}"
+: "${WANDB_PROJECT:=jaxfluids-viq-shape-opt}"
+: "${WANDB_ENTITY:=}"
+: "${WANDB_RUN_NAME:=}"
+: "${WANDB_MODE:=online}"
+: "${WANDB_TAGS:=viq,shape,opt,differentiable}"
 
 : "${JAX_PLATFORMS:=cuda,cpu}"
 : "${JAX_ENABLE_X64:=1}"
@@ -35,6 +41,7 @@ echo "  workdir: ${SCRIPT_DIR}"
 echo "  output:  ${OUT_DIR}"
 echo "  sim_time=${SIM_TIME}s num_iters=${NUM_ITERS} inner_steps=${INNER_STEPS}"
 echo "  JAX_PLATFORMS=${JAX_PLATFORMS} CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+echo "  W&B: USE_WANDB=${USE_WANDB} PROJECT=${WANDB_PROJECT} MODE=${WANDB_MODE}"
 
 "${PYTHON}" - <<'PY'
 import jax
@@ -61,6 +68,21 @@ CMD=(
 
 if [ "$#" -gt 0 ]; then
   CMD+=("$@")
+fi
+
+if [ "${USE_WANDB}" = "1" ]; then
+  CMD+=(
+    "--use-wandb"
+    "--wandb-project" "${WANDB_PROJECT}"
+    "--wandb-mode" "${WANDB_MODE}"
+    "--wandb-tags" "${WANDB_TAGS}"
+  )
+  if [ -n "${WANDB_ENTITY}" ]; then
+    CMD+=("--wandb-entity" "${WANDB_ENTITY}")
+  fi
+  if [ -n "${WANDB_RUN_NAME}" ]; then
+    CMD+=("--wandb-run-name" "${WANDB_RUN_NAME}")
+  fi
 fi
 
 echo "Command: ${CMD[*]}"
