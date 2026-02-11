@@ -7,51 +7,46 @@ cd "${SCRIPT_DIR}"
 : "${PYTHON:=python}"
 : "${SIM_TIME:=100.0}"
 : "${NUM_ITERS:=8}"
-: "${PARALLEL_SIMS:=1}"
+: "${PARALLEL_SIMS:=2}"
 : "${INIT_NOISE:=0.05}"
-: "${INNER_STEPS:=256}"
+: "${INNER_STEPS:=1024}"
 : "${LEARNING_RATE:=0.01}"
 : "${MAX_STEP_NORM:=0.05}"
 : "${RING_R_MIN:=0.7}"
 : "${RING_R_MAX:=1.3}"
 : "${BEZIER_SAMPLES:=180}"
 : "${SEED:=0}"
-: "${SOLVER_PRECISION:=from-setup}"
-: "${THETA_DTYPE:=float64}"
+: "${SOLVER_PRECISION:=single}"
+: "${THETA_DTYPE:=float32}"
 : "${CHECKPOINT_INTEGRATION_STEP:=0}"
 : "${CHECKPOINT_INNER_STEP:=1}"
-: "${SAVE_EVERY:=1}"
-: "${SKIP_SHAPE_ARTIFACTS:=0}"
+: "${SAVE_EVERY:=4}"
+: "${SKIP_SHAPE_ARTIFACTS:=1}"
+
 : "${USE_WANDB:=0}"
 : "${WANDB_PROJECT:=jaxfluids-viq-shape-opt}"
 : "${WANDB_ENTITY:=}"
 : "${WANDB_RUN_NAME:=}"
 : "${WANDB_MODE:=online}"
-: "${WANDB_TAGS:=viq,shape,opt,differentiable}"
+: "${WANDB_TAGS:=viq,shape,opt,differentiable,tpu}"
 
-: "${JAX_PLATFORMS:=cuda,cpu}"
-: "${JAX_ENABLE_X64:=1}"
-: "${XLA_PYTHON_CLIENT_PREALLOCATE:=false}"
-: "${XLA_PYTHON_CLIENT_ALLOCATOR:=platform}"
-: "${CUDA_VISIBLE_DEVICES:=0}"
+: "${JAX_PLATFORMS:=tpu,cpu}"
+: "${JAX_ENABLE_X64:=0}"
 
 export JAX_PLATFORMS
 export JAX_ENABLE_X64
-export XLA_PYTHON_CLIENT_PREALLOCATE
-export XLA_PYTHON_CLIENT_ALLOCATOR
-export CUDA_VISIBLE_DEVICES
 
 STAMP="$(date +%Y%m%d_%H%M%S)"
-: "${OUT_DIR:=full_diff_opt_t100_${STAMP}}"
+: "${OUT_DIR:=full_diff_opt_tpu_fast_t100_${STAMP}}"
 
-echo "Launching VIQ full differentiable optimization"
+echo "Launching VIQ full differentiable optimization (TPU fast profile)"
 echo "  workdir: ${SCRIPT_DIR}"
 echo "  output:  ${OUT_DIR}"
 echo "  sim_time=${SIM_TIME}s num_iters=${NUM_ITERS} parallel_sims=${PARALLEL_SIMS} inner_steps=${INNER_STEPS}"
 echo "  solver_precision=${SOLVER_PRECISION} theta_dtype=${THETA_DTYPE}"
 echo "  checkpoints: inner=${CHECKPOINT_INNER_STEP} integration=${CHECKPOINT_INTEGRATION_STEP}"
 echo "  save_every=${SAVE_EVERY} skip_shape_artifacts=${SKIP_SHAPE_ARTIFACTS}"
-echo "  JAX_PLATFORMS=${JAX_PLATFORMS} CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+echo "  JAX_PLATFORMS=${JAX_PLATFORMS}"
 echo "  W&B: USE_WANDB=${USE_WANDB} PROJECT=${WANDB_PROJECT} MODE=${WANDB_MODE}"
 
 "${PYTHON}" - <<'PY'
@@ -82,10 +77,6 @@ CMD=(
   "--jit"
 )
 
-if [ "$#" -gt 0 ]; then
-  CMD+=("$@")
-fi
-
 if [ "${CHECKPOINT_INNER_STEP}" = "1" ]; then
   CMD+=("--checkpoint-inner-step")
 else
@@ -113,6 +104,10 @@ if [ "${USE_WANDB}" = "1" ]; then
   if [ -n "${WANDB_RUN_NAME}" ]; then
     CMD+=("--wandb-run-name" "${WANDB_RUN_NAME}")
   fi
+fi
+
+if [ "$#" -gt 0 ]; then
+  CMD+=("$@")
 fi
 
 echo "Command: ${CMD[*]}"

@@ -60,6 +60,52 @@ def make_wandb_iter_payload(row: Dict[str, Any], theta_np: np.ndarray) -> Dict[s
     return payload
 
 
+def maybe_apply_solver_precision_override(numerical_setup: Dict[str, Any], solver_precision: str) -> Dict[str, Any]:
+    if solver_precision == "from-setup":
+        return numerical_setup
+    num = copy.deepcopy(numerical_setup)
+    precision = num.setdefault("precision", {})
+    if solver_precision == "single":
+        precision["is_double_precision_compute"] = False
+        precision["is_double_precision_output"] = False
+    elif solver_precision == "double":
+        precision["is_double_precision_compute"] = True
+        precision["is_double_precision_output"] = True
+    else:
+        raise ValueError(f"Unknown solver_precision: {solver_precision}")
+    return num
+
+
+def maybe_make_initial_theta_batch(
+    parallel_sims: int,
+    seed: int,
+    theta_dtype: jnp.dtype,
+    r_min: float,
+    r_max: float,
+    init_noise: float,
+) -> jax.Array:
+    base_theta = jnp.array(
+        [
+            [1.05, 0.00],
+            [0.05, 1.00],
+            [-1.00, 0.10],
+            [0.00, -0.95],
+        ],
+        dtype=theta_dtype,
+    )
+    base_theta = clamp_points_to_ring_jax(base_theta, r_min, r_max)
+    theta_batch = jnp.broadcast_to(base_theta[None, ...], (parallel_sims, 4, 2))
+    if parallel_sims == 1 or init_noise <= 0.0:
+        return theta_batch
+
+    key = jax.random.PRNGKey(seed)
+    noise = init_noise * jax.random.normal(key, shape=theta_batch.shape, dtype=theta_dtype)
+    theta_batch = theta_batch + noise
+    theta_batch = theta_batch.at[0].set(base_theta)
+    theta_batch = jax.vmap(clamp_points_to_ring_jax, in_axes=(0, None, None))(theta_batch, r_min, r_max)
+    return theta_batch
+
+
 def clamp_points_to_ring_jax(points: jax.Array, r_min: float, r_max: float) -> jax.Array:
     radii = jnp.linalg.norm(points, axis=1) + 1.0e-14
     clamped = jnp.clip(radii, r_min, r_max)
@@ -212,7 +258,7 @@ def compute_cd_cl_series(
     return force_x / coeff_scale, force_y / coeff_scale
 
 
-def build_objective(
+def build_objective_batched(
     sim_manager: SimulationManager,
     primes_init: jax.Array,
     x_cells: jax.Array,
@@ -224,41 +270,55 @@ def build_objective(
     r_max: float,
     bezier_samples: int,
 ) -> callable:
-    def objective(theta: jax.Array):
-        theta = clamp_points_to_ring_jax(theta, r_min, r_max)
-        contour = bezier_closed_from_four_points_jax(theta, bezier_samples, tension=1.0)
-        levelset_xy = signed_distance_from_contour_jax(contour, theta, x_cells, y_cells)
-        levelset = levelset_xy[..., None]
+    def objective(theta_batch: jax.Array):
+        theta_batch = jax.vmap(clamp_points_to_ring_jax, in_axes=(0, None, None))(theta_batch, r_min, r_max)
+
+        def one_levelset(theta: jax.Array) -> jax.Array:
+            contour = bezier_closed_from_four_points_jax(theta, bezier_samples, tension=1.0)
+            return signed_distance_from_contour_jax(contour, theta, x_cells, y_cells)
+
+        levelset_xy_batch = jax.vmap(one_levelset, in_axes=0, out_axes=0)(theta_batch)
+        levelset_batch = levelset_xy_batch[..., None]
+        batch_size = theta_batch.shape[0]
+        batch_primes_init = jnp.broadcast_to(primes_init[None, ...], (batch_size,) + primes_init.shape)
+        dt_vec = jnp.full((batch_size,), dt)
+        t0_vec = jnp.full((batch_size,), t0)
 
         solution, times = sim_manager.feed_forward(
-            batch_primes_init=primes_init[None, ...],
-            physical_timestep_size=jnp.array([dt]),
-            t_start=jnp.array([t0]),
+            batch_primes_init=batch_primes_init,
+            physical_timestep_size=dt_vec,
+            t_start=t0_vec,
             feed_forward_setup=feed_forward_setup,
-            batch_levelset_init=levelset[None, ...],
+            batch_levelset_init=levelset_batch,
         )
 
-        primitives = solution["primitives"][0]  # (T, 5, Nx, Ny, Nz)
-        levelset_single = solution["levelset"][0, :, :, 0]
+        primitives_batch = solution["primitives"]  # (B, T, 5, Nx, Ny, Nz)
+        levelset_single_batch = solution["levelset"][:, :, :, 0]  # (B, Nx, Ny)
 
-        cd, cl = compute_cd_cl_series(
-            primitives_t=primitives,
-            levelset=levelset_single,
-            x=x_cells,
-            y=y_cells,
-            dynamic_viscosity=0.01,
+        cd, cl = jax.vmap(
+            compute_cd_cl_series,
+            in_axes=(0, 0, None, None, None),
+            out_axes=(0, 0),
+        )(
+            primitives_batch,
+            levelset_single_batch,
+            x_cells,
+            y_cells,
+            0.01,
         )
 
-        ratio = cl / (jnp.abs(cd) + 1.0e-12)
-        half_idx = ratio.shape[0] // 2
-        reward = jnp.mean(ratio[half_idx:])
+        ratio = cl / (jnp.abs(cd) + 1.0e-12)  # (B, T)
+        half_idx = ratio.shape[1] // 2
+        rewards = jnp.mean(ratio[:, half_idx:], axis=1)
+        reward = jnp.sum(rewards)
         aux = {
             "reward": reward,
-            "mean_cd_second_half": jnp.mean(cd[half_idx:]),
-            "mean_cl_second_half": jnp.mean(cl[half_idx:]),
-            "end_time": times[0, -1],
-            "levelset_xy": levelset_xy,
-            "theta": theta,
+            "rewards": rewards,
+            "mean_cd_second_half": jnp.mean(cd[:, half_idx:], axis=1),
+            "mean_cl_second_half": jnp.mean(cl[:, half_idx:], axis=1),
+            "end_time": times[:, -1],
+            "levelset_xy_batch": levelset_xy_batch,
+            "theta_batch": theta_batch,
         }
         return reward, aux
 
@@ -272,6 +332,8 @@ def main() -> None:
     parser.add_argument("--output-dir", default="full_diff_opt_t100")
     parser.add_argument("--sim-time", type=float, default=100.0)
     parser.add_argument("--num-iters", type=int, default=8)
+    parser.add_argument("--parallel-sims", type=int, default=1, help="Number of simulations to run in parallel.")
+    parser.add_argument("--init-noise", type=float, default=0.05, help="Init noise for extra parallel candidates.")
     parser.add_argument("--inner-steps", type=int, default=256)
     parser.add_argument("--learning-rate", type=float, default=0.01)
     parser.add_argument("--max-step-norm", type=float, default=0.05)
@@ -280,6 +342,14 @@ def main() -> None:
     parser.add_argument("--bezier-samples", type=int, default=180)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--jit", action="store_true", help="JIT compile value+grad function.")
+    parser.add_argument("--solver-precision", choices=["from-setup", "single", "double"], default="from-setup")
+    parser.add_argument("--theta-dtype", choices=["float32", "float64"], default="float64")
+    parser.add_argument("--checkpoint-integration-step", action="store_true")
+    parser.add_argument("--checkpoint-inner-step", dest="checkpoint_inner_step", action="store_true")
+    parser.add_argument("--no-checkpoint-inner-step", dest="checkpoint_inner_step", action="store_false")
+    parser.set_defaults(checkpoint_inner_step=True)
+    parser.add_argument("--save-every", type=int, default=1, help="Save shape artifacts every N iterations.")
+    parser.add_argument("--skip-shape-artifacts", action="store_true", help="Skip PNG/H5 shape artifacts for speed.")
     parser.add_argument("--use-wandb", action="store_true", help="Enable Weights & Biases logging.")
     parser.add_argument("--wandb-project", default="jaxfluids-viq-shape-opt")
     parser.add_argument("--wandb-entity", default="")
@@ -287,6 +357,12 @@ def main() -> None:
     parser.add_argument("--wandb-mode", choices=["online", "offline", "disabled"], default="online")
     parser.add_argument("--wandb-tags", default="viq,shape,opt,differentiable")
     args = parser.parse_args()
+    if args.save_every < 1:
+        raise ValueError("--save-every must be >= 1")
+    if args.num_iters < 1:
+        raise ValueError("--num-iters must be >= 1")
+    if args.parallel_sims < 1:
+        raise ValueError("--parallel-sims must be >= 1")
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -297,6 +373,7 @@ def main() -> None:
 
     case_dict = json.loads(Path(args.case_setup).read_text())
     numerical_dict = json.loads(Path(args.numerical_setup).read_text())
+    numerical_dict = maybe_apply_solver_precision_override(numerical_dict, args.solver_precision)
     numerical_ff_dict = prepare_feedforward_compatible_numerical_setup(numerical_dict)
 
     input_manager = InputManager(case_dict, numerical_ff_dict)
@@ -319,13 +396,13 @@ def main() -> None:
         outer_steps=outer_steps,
         inner_steps=args.inner_steps,
         is_scan=True,
-        is_checkpoint_inner_step=True,
-        is_checkpoint_integration_step=False,
+        is_checkpoint_inner_step=args.checkpoint_inner_step,
+        is_checkpoint_integration_step=args.checkpoint_integration_step,
         is_include_t0=True,
         is_include_halos=False,
     )
 
-    objective = build_objective(
+    objective = build_objective_batched(
         sim_manager=sim_manager,
         primes_init=primes_init,
         x_cells=x_cells,
@@ -341,16 +418,15 @@ def main() -> None:
     if args.jit:
         value_and_grad = jax.jit(value_and_grad)
 
-    theta = jnp.array(
-        [
-            [1.05, 0.00],
-            [0.05, 1.00],
-            [-1.00, 0.10],
-            [0.00, -0.95],
-        ],
-        dtype=jnp.float64,
+    theta_dtype = jnp.float32 if args.theta_dtype == "float32" else jnp.float64
+    theta_batch = maybe_make_initial_theta_batch(
+        parallel_sims=args.parallel_sims,
+        seed=args.seed,
+        theta_dtype=theta_dtype,
+        r_min=args.ring_r_min,
+        r_max=args.ring_r_max,
+        init_noise=args.init_noise,
     )
-    theta = clamp_points_to_ring_jax(theta, args.ring_r_min, args.ring_r_max)
 
     run_config = {
         "case_setup": str(Path(args.case_setup).resolve()),
@@ -361,8 +437,16 @@ def main() -> None:
         "outer_steps": outer_steps,
         "inner_steps": args.inner_steps,
         "num_iters": args.num_iters,
+        "parallel_sims": args.parallel_sims,
+        "init_noise": args.init_noise,
         "learning_rate": args.learning_rate,
         "max_step_norm": args.max_step_norm,
+        "solver_precision": args.solver_precision,
+        "theta_dtype": args.theta_dtype,
+        "checkpoint_inner_step": args.checkpoint_inner_step,
+        "checkpoint_integration_step": args.checkpoint_integration_step,
+        "save_every": args.save_every,
+        "skip_shape_artifacts": args.skip_shape_artifacts,
         "ring_r_min": args.ring_r_min,
         "ring_r_max": args.ring_r_max,
         "bezier_samples": args.bezier_samples,
@@ -384,6 +468,7 @@ def main() -> None:
         writer.writerow(
             [
                 "iter",
+                "candidate",
                 "reward",
                 "mean_cd_second_half",
                 "mean_cl_second_half",
@@ -391,92 +476,161 @@ def main() -> None:
                 "step_norm",
                 "wall_seconds",
                 "sim_end_time",
+                "cp0_x",
+                "cp0_y",
+                "cp1_x",
+                "cp1_y",
+                "cp2_x",
+                "cp2_y",
+                "cp3_x",
+                "cp3_y",
             ]
         )
 
     history = []
     for it in range(args.num_iters):
         t_start_iter = time.time()
-        (reward, aux), grad = value_and_grad(theta)
-        reward = jnp.nan_to_num(reward, nan=-1.0e6, posinf=1.0e6, neginf=-1.0e6)
+        (reward_total, aux), grad = value_and_grad(theta_batch)
+        reward_total = jnp.nan_to_num(reward_total, nan=-1.0e6, posinf=1.0e6, neginf=-1.0e6)
         aux = {
+            "rewards": jnp.nan_to_num(aux["rewards"], nan=-1.0e6, posinf=1.0e6, neginf=-1.0e6),
             "mean_cd_second_half": jnp.nan_to_num(aux["mean_cd_second_half"], nan=1.0e6, posinf=1.0e6, neginf=-1.0e6),
             "mean_cl_second_half": jnp.nan_to_num(aux["mean_cl_second_half"], nan=0.0, posinf=1.0e6, neginf=-1.0e6),
             "end_time": jnp.nan_to_num(aux["end_time"], nan=0.0, posinf=0.0, neginf=0.0),
-            "levelset_xy": jnp.nan_to_num(aux["levelset_xy"], nan=0.0, posinf=0.0, neginf=0.0),
-            "theta": jnp.nan_to_num(aux["theta"], nan=0.0, posinf=0.0, neginf=0.0),
+            "levelset_xy_batch": jnp.nan_to_num(aux["levelset_xy_batch"], nan=0.0, posinf=0.0, neginf=0.0),
+            "theta_batch": jnp.nan_to_num(aux["theta_batch"], nan=0.0, posinf=0.0, neginf=0.0),
         }
-        grad = jnp.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0)
-        reward_f = float(reward)
-        grad_norm = float(jnp.linalg.norm(grad))
+        grad_batch = jnp.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0)
 
-        step = args.learning_rate * grad
-        step_norm = float(jnp.linalg.norm(step))
-        if step_norm > args.max_step_norm and step_norm > 0.0:
-            step = step * (args.max_step_norm / (step_norm + 1.0e-14))
-            step_norm = args.max_step_norm
-
-        theta = clamp_points_to_ring_jax(theta + step, args.ring_r_min, args.ring_r_max)
+        step_batch = args.learning_rate * grad_batch
+        step_norms = jnp.linalg.norm(step_batch.reshape((args.parallel_sims, -1)), axis=1)
+        scales = jnp.where(
+            step_norms > args.max_step_norm,
+            args.max_step_norm / (step_norms + 1.0e-14),
+            1.0,
+        )
+        step_batch = step_batch * scales[:, None, None]
+        step_norms = jnp.linalg.norm(step_batch.reshape((args.parallel_sims, -1)), axis=1)
+        theta_batch = jax.vmap(clamp_points_to_ring_jax, in_axes=(0, None, None))(
+            theta_batch + step_batch, args.ring_r_min, args.ring_r_max
+        )
         elapsed = time.time() - t_start_iter
 
-        theta_np = np.asarray(theta)
-        levelset_xy_np = np.asarray(aux["levelset_xy"])
         iter_dir = out_dir / "iter_shapes" / f"iter_{it:03d}"
         iter_dir.mkdir(parents=True, exist_ok=True)
-        write_levelset_h5(levelset_xy_np, iter_dir / "levelset.h5")
-        contour_np = np.asarray(
-            bezier_closed_from_four_points_jax(theta, args.bezier_samples, tension=1.0)
-        )
-        render_shape_preview(contour_np, theta_np, iter_dir / "shape.png")
 
-        row = {
-            "iter": it,
-            "reward": reward_f,
-            "mean_cd_second_half": float(aux["mean_cd_second_half"]),
-            "mean_cl_second_half": float(aux["mean_cl_second_half"]),
-            "grad_norm": grad_norm,
-            "step_norm": step_norm,
-            "wall_seconds": elapsed,
-            "sim_end_time": float(aux["end_time"]),
-            "theta": theta_np.tolist(),
-        }
-        history.append(row)
-        with history_csv.open("a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(
-                [
-                    row["iter"],
-                    row["reward"],
-                    row["mean_cd_second_half"],
-                    row["mean_cl_second_half"],
-                    row["grad_norm"],
-                    row["step_norm"],
-                    row["wall_seconds"],
-                    row["sim_end_time"],
-                ]
-            )
-        (iter_dir / "metrics.json").write_text(json.dumps(row, indent=2))
+        theta_np_batch = np.asarray(theta_batch)
+        rewards_np = np.asarray(aux["rewards"])
+        cd_np = np.asarray(aux["mean_cd_second_half"])
+        cl_np = np.asarray(aux["mean_cl_second_half"])
+        end_time_np = np.asarray(aux["end_time"])
+        grad_norms_np = np.asarray(jnp.linalg.norm(grad_batch.reshape((args.parallel_sims, -1)), axis=1))
+        step_norms_np = np.asarray(step_norms)
+
+        should_save_shape = (it % args.save_every == 0) or (it == args.num_iters - 1)
+        levelset_np_batch = None
+        if should_save_shape and not args.skip_shape_artifacts:
+            levelset_np_batch = np.asarray(aux["levelset_xy_batch"])
+        iter_metrics = []
+        for cand in range(args.parallel_sims):
+            cand_dir = iter_dir / f"cand_{cand:03d}"
+            cand_dir.mkdir(parents=True, exist_ok=True)
+
+            if should_save_shape and not args.skip_shape_artifacts:
+                write_levelset_h5(levelset_np_batch[cand], cand_dir / "levelset.h5")
+                contour_np = np.asarray(
+                    bezier_closed_from_four_points_jax(jnp.asarray(theta_np_batch[cand]), args.bezier_samples, tension=1.0)
+                )
+                render_shape_preview(contour_np, theta_np_batch[cand], cand_dir / "shape.png")
+
+            row = {
+                "iter": it,
+                "candidate": cand,
+                "reward": float(rewards_np[cand]),
+                "mean_cd_second_half": float(cd_np[cand]),
+                "mean_cl_second_half": float(cl_np[cand]),
+                "grad_norm": float(grad_norms_np[cand]),
+                "step_norm": float(step_norms_np[cand]),
+                "wall_seconds": elapsed,
+                "sim_end_time": float(end_time_np[cand]),
+                "theta": theta_np_batch[cand].tolist(),
+            }
+            history.append(row)
+            iter_metrics.append(row)
+            with history_csv.open("a", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(
+                    [
+                        row["iter"],
+                        row["candidate"],
+                        row["reward"],
+                        row["mean_cd_second_half"],
+                        row["mean_cl_second_half"],
+                        row["grad_norm"],
+                        row["step_norm"],
+                        row["wall_seconds"],
+                        row["sim_end_time"],
+                        row["theta"][0][0],
+                        row["theta"][0][1],
+                        row["theta"][1][0],
+                        row["theta"][1][1],
+                        row["theta"][2][0],
+                        row["theta"][2][1],
+                        row["theta"][3][0],
+                        row["theta"][3][1],
+                    ]
+                )
+            (cand_dir / "metrics.json").write_text(json.dumps(row, indent=2))
+
+        (iter_dir / "metrics_all_candidates.json").write_text(json.dumps(iter_metrics, indent=2))
         if wandb_run is not None:
-            wandb_run.log(make_wandb_iter_payload(row, theta_np), step=it)
+            wb_payload: Dict[str, float] = {
+                "reward_total": float(reward_total),
+                "reward_mean": float(np.mean(rewards_np)),
+                "reward_best": float(np.max(rewards_np)),
+                "drag_mean": float(np.mean(cd_np)),
+                "lift_mean": float(np.mean(cl_np)),
+            }
+            for cand in range(args.parallel_sims):
+                wb_payload[f"cand_{cand}/reward"] = float(rewards_np[cand])
+                wb_payload[f"cand_{cand}/drag"] = float(cd_np[cand])
+                wb_payload[f"cand_{cand}/lift"] = float(cl_np[cand])
+                for i in range(4):
+                    wb_payload[f"cand_{cand}/control_point_{i}_x"] = float(theta_np_batch[cand, i, 0])
+                    wb_payload[f"cand_{cand}/control_point_{i}_y"] = float(theta_np_batch[cand, i, 1])
+            wandb_run.log(wb_payload, step=it)
+
+        best_idx = int(np.argmax(rewards_np))
         print(
-            f"[iter {it:03d}] reward={row['reward']:.6f} "
-            f"Cd={row['mean_cd_second_half']:.6f} Cl={row['mean_cl_second_half']:.6f} "
-            f"|grad|={row['grad_norm']:.6e} step={row['step_norm']:.6e} "
-            f"t={row['wall_seconds']:.2f}s"
+            f"[iter {it:03d}] sims={args.parallel_sims} "
+            f"reward_mean={np.mean(rewards_np):.6f} reward_best={np.max(rewards_np):.6f} "
+            f"(cand={best_idx:03d}) t={elapsed:.2f}s"
         )
 
+    rewards_last = np.asarray([h["reward"] for h in history[-args.parallel_sims:]], dtype=np.float64)
+    best_final_idx = int(np.argmax(rewards_last))
+    best_global = history[-args.parallel_sims + best_final_idx]
     final = {
-        "final_theta": np.asarray(theta).tolist(),
+        "parallel_sims": args.parallel_sims,
+        "final_theta_batch": np.asarray(theta_batch).tolist(),
+        "best_final_candidate": best_final_idx,
+        "best_final_reward": float(best_global["reward"]),
+        "best_final_theta": best_global["theta"],
         "history": history,
     }
+    if args.parallel_sims == 1:
+        final["final_theta"] = final["final_theta_batch"][0]
     (out_dir / "final_summary.json").write_text(json.dumps(final, indent=2))
     if wandb_run is not None:
-        wandb_run.summary["final_theta"] = final["final_theta"]
-        wandb_run.summary["num_iters"] = len(history)
+        wandb_run.summary["final_theta_batch"] = final["final_theta_batch"]
+        wandb_run.summary["best_final_candidate"] = best_final_idx
+        wandb_run.summary["best_final_reward"] = float(best_global["reward"])
+        wandb_run.summary["num_iters"] = args.num_iters
+        wandb_run.summary["history_rows"] = len(history)
         if history:
-            wandb_run.summary["final_reward"] = history[-1]["reward"]
-            wandb_run.summary["final_drag"] = history[-1]["mean_cd_second_half"]
-            wandb_run.summary["final_lift"] = history[-1]["mean_cl_second_half"]
+            wandb_run.summary["final_reward"] = float(best_global["reward"])
+            wandb_run.summary["final_drag"] = float(best_global["mean_cd_second_half"])
+            wandb_run.summary["final_lift"] = float(best_global["mean_cl_second_half"])
         wandb_run.finish()
     print(f"Saved optimization outputs to: {out_dir.resolve()}")
 
