@@ -6,7 +6,7 @@ import csv
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -79,6 +79,154 @@ def maybe_apply_solver_precision_override(numerical_setup: Dict[str, Any], solve
 def finite_float_or_none(value: Any) -> Any:
     value_f = float(value)
     return value_f if np.isfinite(value_f) else None
+
+
+def build_objective_value_fn(objective_fn: Callable, do_jit: bool) -> Callable[[jax.Array], jax.Array]:
+    def objective_value(theta_batch: jax.Array) -> jax.Array:
+        reward, _ = objective_fn(theta_batch)
+        return reward
+
+    return jax.jit(objective_value) if do_jit else objective_value
+
+
+def build_backward_diagnostic_grad_fns(objective_fn: Callable) -> Dict[str, Callable[[jax.Array], jax.Array]]:
+    return {
+        "reward": jax.grad(lambda theta_batch: objective_fn(theta_batch)[0]),
+        "mean_cd_second_half": jax.grad(
+            lambda theta_batch: jnp.sum(objective_fn(theta_batch)[1]["mean_cd_second_half"])
+        ),
+        "mean_cl_second_half": jax.grad(
+            lambda theta_batch: jnp.sum(objective_fn(theta_batch)[1]["mean_cl_second_half"])
+        ),
+    }
+
+
+def diagnose_backward_terms(
+    theta_batch: jax.Array,
+    grad_fns: Dict[str, Callable[[jax.Array], jax.Array]],
+) -> Dict[str, Any]:
+    batch_size = int(theta_batch.shape[0])
+    diagnostics: Dict[str, Any] = {
+        "first_nonfinite_term": None,
+        "first_nonfinite_term_by_candidate": ["none"] * batch_size,
+        "term_nonfinite_counts": {},
+        "term_nonfinite_counts_by_candidate": {},
+        "term_errors": {},
+    }
+    order = ["reward", "mean_cd_second_half", "mean_cl_second_half"]
+    for term in order:
+        fn = grad_fns[term]
+        try:
+            grad_term = fn(theta_batch)
+            grad_term_np = np.asarray(grad_term)
+            counts_by_candidate = np.sum(
+                ~np.isfinite(grad_term_np.reshape((batch_size, -1))),
+                axis=1,
+            ).astype(np.int64)
+            count = int(np.sum(counts_by_candidate))
+            diagnostics["term_nonfinite_counts"][term] = count
+            diagnostics["term_nonfinite_counts_by_candidate"][term] = counts_by_candidate.tolist()
+            for cand in range(batch_size):
+                if diagnostics["first_nonfinite_term_by_candidate"][cand] == "none" and counts_by_candidate[cand] > 0:
+                    diagnostics["first_nonfinite_term_by_candidate"][cand] = term
+            if diagnostics["first_nonfinite_term"] is None and count > 0:
+                diagnostics["first_nonfinite_term"] = term
+        except Exception as exc:  # pragma: no cover - runtime diagnostics path
+            diagnostics["term_nonfinite_counts"][term] = None
+            diagnostics["term_nonfinite_counts_by_candidate"][term] = [None] * batch_size
+            diagnostics["term_errors"][term] = f"{type(exc).__name__}: {exc}"
+            for cand in range(batch_size):
+                if diagnostics["first_nonfinite_term_by_candidate"][cand] == "none":
+                    diagnostics["first_nonfinite_term_by_candidate"][cand] = term
+            if diagnostics["first_nonfinite_term"] is None:
+                diagnostics["first_nonfinite_term"] = term
+    if diagnostics["first_nonfinite_term"] is None:
+        diagnostics["first_nonfinite_term"] = "none"
+    return diagnostics
+
+
+def estimate_fd_grad_batch(
+    theta_batch: jax.Array,
+    nonfinite_candidate_mask: np.ndarray,
+    objective_value_fn: Callable[[jax.Array], jax.Array],
+    r_min: float,
+    r_max: float,
+    eps: float,
+    mode: str,
+    spsa_samples: int,
+    rng: np.random.Generator,
+) -> Tuple[jax.Array, Dict[str, Any]]:
+    grad_batch = jnp.zeros_like(theta_batch)
+    eval_count = 0
+    bad_eval_count = 0
+    eval_count_by_candidate = np.zeros((theta_batch.shape[0],), dtype=np.int64)
+    bad_eval_count_by_candidate = np.zeros((theta_batch.shape[0],), dtype=np.int64)
+    used_candidates: List[int] = []
+
+    candidate_indices = [int(i) for i in np.where(nonfinite_candidate_mask)[0].tolist()]
+    for cand in candidate_indices:
+        used_candidates.append(cand)
+        theta_cand = theta_batch[cand]
+        grad_cand = jnp.zeros_like(theta_cand)
+
+        if mode == "spsa":
+            if spsa_samples < 1:
+                raise ValueError("spsa_samples must be >= 1")
+            for _ in range(spsa_samples):
+                delta_np = rng.choice(np.array([-1.0, 1.0], dtype=np.float64), size=theta_cand.shape)
+                delta = jnp.asarray(delta_np, dtype=theta_cand.dtype)
+                theta_plus_cand = clamp_points_to_ring_jax(theta_cand + eps * delta, r_min, r_max)
+                theta_minus_cand = clamp_points_to_ring_jax(theta_cand - eps * delta, r_min, r_max)
+                theta_plus = theta_batch.at[cand].set(theta_plus_cand)
+                theta_minus = theta_batch.at[cand].set(theta_minus_cand)
+                f_plus = objective_value_fn(theta_plus)
+                f_minus = objective_value_fn(theta_minus)
+                eval_count += 2
+                eval_count_by_candidate[cand] += 2
+                if not (jnp.isfinite(f_plus) and jnp.isfinite(f_minus)):
+                    bad_eval_count += 1
+                    bad_eval_count_by_candidate[cand] += 1
+                    continue
+                slope = (f_plus - f_minus) / (2.0 * eps)
+                grad_cand = grad_cand + slope * delta
+            grad_cand = grad_cand / max(spsa_samples, 1)
+
+        elif mode == "coordinate":
+            for i in range(theta_cand.shape[0]):
+                for j in range(theta_cand.shape[1]):
+                    theta_plus_cand = clamp_points_to_ring_jax(
+                        theta_cand.at[i, j].add(eps), r_min, r_max
+                    )
+                    theta_minus_cand = clamp_points_to_ring_jax(
+                        theta_cand.at[i, j].add(-eps), r_min, r_max
+                    )
+                    theta_plus = theta_batch.at[cand].set(theta_plus_cand)
+                    theta_minus = theta_batch.at[cand].set(theta_minus_cand)
+                    f_plus = objective_value_fn(theta_plus)
+                    f_minus = objective_value_fn(theta_minus)
+                    eval_count += 2
+                    eval_count_by_candidate[cand] += 2
+                    if not (jnp.isfinite(f_plus) and jnp.isfinite(f_minus)):
+                        bad_eval_count += 1
+                        bad_eval_count_by_candidate[cand] += 1
+                        continue
+                    grad_cand = grad_cand.at[i, j].set((f_plus - f_minus) / (2.0 * eps))
+        else:
+            raise ValueError(f"Unknown FD mode: {mode}")
+
+        grad_batch = grad_batch.at[cand].set(grad_cand)
+
+    info = {
+        "fd_used_candidates": used_candidates,
+        "fd_eval_count": eval_count,
+        "fd_bad_eval_count": bad_eval_count,
+        "fd_eval_count_by_candidate": eval_count_by_candidate.tolist(),
+        "fd_bad_eval_count_by_candidate": bad_eval_count_by_candidate.tolist(),
+        "fd_mode": mode,
+        "fd_eps": eps,
+        "fd_spsa_samples": spsa_samples,
+    }
+    return grad_batch, info
 
 
 def maybe_make_initial_theta_batch(
@@ -372,7 +520,7 @@ def main() -> None:
     parser.add_argument("--parallel-sims", type=int, default=1, help="Number of simulations to run in parallel.")
     parser.add_argument("--init-noise", type=float, default=0.05, help="Init noise for extra parallel candidates.")
     parser.add_argument("--inner-steps", type=int, default=256)
-    parser.add_argument("--learning-rate", type=float, default=0.01)
+    parser.add_argument("--learning-rate", type=float, default=0.1)
     parser.add_argument("--max-step-norm", type=float, default=0.05)
     parser.add_argument("--ring-r-min", type=float, default=0.7)
     parser.add_argument("--ring-r-max", type=float, default=1.3)
@@ -387,6 +535,38 @@ def main() -> None:
     parser.set_defaults(checkpoint_inner_step=True)
     parser.add_argument("--save-every", type=int, default=1, help="Save shape artifacts every N iterations.")
     parser.add_argument("--skip-shape-artifacts", action="store_true", help="Skip PNG/H5 shape artifacts for speed.")
+    parser.add_argument(
+        "--fail-on-nonfinite-grad",
+        action="store_true",
+        help="Fail fast when non-finite gradients are detected and unresolved.",
+    )
+    parser.add_argument(
+        "--enable-fd-fallback",
+        action="store_true",
+        help="Use finite-difference fallback when AD gradients are non-finite.",
+    )
+    parser.add_argument(
+        "--disable-fd-fallback",
+        dest="enable_fd_fallback",
+        action="store_false",
+        help="Disable finite-difference fallback.",
+    )
+    parser.set_defaults(enable_fd_fallback=True)
+    parser.add_argument("--fd-eps", type=float, default=1.0e-3)
+    parser.add_argument("--fd-mode", choices=["spsa", "coordinate"], default="spsa")
+    parser.add_argument("--fd-spsa-samples", type=int, default=2)
+    parser.add_argument(
+        "--log-backward-diagnostics",
+        action="store_true",
+        help="Log which backward term first goes non-finite (reward/Cd/Cl).",
+    )
+    parser.add_argument(
+        "--no-log-backward-diagnostics",
+        dest="log_backward_diagnostics",
+        action="store_false",
+        help="Disable backward non-finite term diagnostics.",
+    )
+    parser.set_defaults(log_backward_diagnostics=False)
     parser.add_argument("--use-wandb", action="store_true", help="Enable Weights & Biases logging.")
     parser.add_argument("--wandb-project", default="jaxfluids-viq-shape-opt")
     parser.add_argument("--wandb-entity", default="")
@@ -400,6 +580,10 @@ def main() -> None:
         raise ValueError("--num-iters must be >= 1")
     if args.parallel_sims < 1:
         raise ValueError("--parallel-sims must be >= 1")
+    if args.fd_eps <= 0.0:
+        raise ValueError("--fd-eps must be > 0")
+    if args.fd_spsa_samples < 1:
+        raise ValueError("--fd-spsa-samples must be >= 1")
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -454,6 +638,8 @@ def main() -> None:
     value_and_grad = jax.value_and_grad(objective, has_aux=True)
     if args.jit:
         value_and_grad = jax.jit(value_and_grad)
+    objective_value_fn = build_objective_value_fn(objective, do_jit=args.jit)
+    backward_diag_grad_fns = build_backward_diagnostic_grad_fns(objective) if args.log_backward_diagnostics else None
 
     theta_dtype = jnp.float32 if args.theta_dtype == "float32" else jnp.float64
     theta_batch = maybe_make_initial_theta_batch(
@@ -484,6 +670,12 @@ def main() -> None:
         "checkpoint_integration_step": args.checkpoint_integration_step,
         "save_every": args.save_every,
         "skip_shape_artifacts": args.skip_shape_artifacts,
+        "fail_on_nonfinite_grad": args.fail_on_nonfinite_grad,
+        "enable_fd_fallback": args.enable_fd_fallback,
+        "fd_eps": args.fd_eps,
+        "fd_mode": args.fd_mode,
+        "fd_spsa_samples": args.fd_spsa_samples,
+        "log_backward_diagnostics": args.log_backward_diagnostics,
         "ring_r_min": args.ring_r_min,
         "ring_r_max": args.ring_r_max,
         "bezier_samples": args.bezier_samples,
@@ -520,6 +712,17 @@ def main() -> None:
                 "cd_nonfinite_count",
                 "cl_nonfinite_count",
                 "max_abs_primitives",
+                "grad_raw_nonfinite_count",
+                "grad_raw_norm_before_sanitize",
+                "grad_unresolved_nonfinite_count",
+                "grad_source",
+                "fd_fallback_used",
+                "fd_eval_count",
+                "fd_bad_eval_count",
+                "first_nonfinite_backward_term",
+                "backward_reward_nonfinite_count",
+                "backward_cd_nonfinite_count",
+                "backward_cl_nonfinite_count",
                 "grad_norm",
                 "step_norm",
                 "wall_seconds",
@@ -539,6 +742,83 @@ def main() -> None:
     for it in range(args.num_iters):
         t_start_iter = time.time()
         (reward_total_raw, aux_raw), grad_raw = value_and_grad(theta_batch)
+        grad_ad_raw = grad_raw
+        grad_ad_raw_np = np.asarray(grad_ad_raw)
+        grad_ad_raw_nonfinite_counts_np = np.sum(
+            ~np.isfinite(grad_ad_raw_np.reshape((args.parallel_sims, -1))),
+            axis=1,
+        )
+        nonfinite_grad_mask_np = grad_ad_raw_nonfinite_counts_np > 0
+
+        backward_diag: Dict[str, Any] | None = None
+        backward_first_terms: List[str] = ["none"] * args.parallel_sims
+        backward_reward_nonfinite_counts: List[Any] = [0] * args.parallel_sims
+        backward_cd_nonfinite_counts: List[Any] = [0] * args.parallel_sims
+        backward_cl_nonfinite_counts: List[Any] = [0] * args.parallel_sims
+        if args.log_backward_diagnostics and backward_diag_grad_fns is not None and np.any(nonfinite_grad_mask_np):
+            backward_diag = diagnose_backward_terms(theta_batch, backward_diag_grad_fns)
+            backward_first_terms = list(backward_diag.get("first_nonfinite_term_by_candidate", backward_first_terms))
+            term_counts_by_candidate = backward_diag.get("term_nonfinite_counts_by_candidate", {})
+            backward_reward_nonfinite_counts = term_counts_by_candidate.get(
+                "reward", backward_reward_nonfinite_counts
+            )
+            backward_cd_nonfinite_counts = term_counts_by_candidate.get(
+                "mean_cd_second_half", backward_cd_nonfinite_counts
+            )
+            backward_cl_nonfinite_counts = term_counts_by_candidate.get(
+                "mean_cl_second_half", backward_cl_nonfinite_counts
+            )
+
+        fd_info: Dict[str, Any] = {
+            "fd_used_candidates": [],
+            "fd_eval_count": 0,
+            "fd_bad_eval_count": 0,
+            "fd_eval_count_by_candidate": [0] * args.parallel_sims,
+            "fd_bad_eval_count_by_candidate": [0] * args.parallel_sims,
+            "fd_mode": args.fd_mode,
+            "fd_eps": args.fd_eps,
+            "fd_spsa_samples": args.fd_spsa_samples,
+        }
+        grad_effective_raw = grad_ad_raw
+        if np.any(nonfinite_grad_mask_np) and args.enable_fd_fallback:
+            rng = np.random.default_rng(args.seed + it)
+            fd_grad_batch, fd_info = estimate_fd_grad_batch(
+                theta_batch=theta_batch,
+                nonfinite_candidate_mask=nonfinite_grad_mask_np,
+                objective_value_fn=objective_value_fn,
+                r_min=args.ring_r_min,
+                r_max=args.ring_r_max,
+                eps=args.fd_eps,
+                mode=args.fd_mode,
+                spsa_samples=args.fd_spsa_samples,
+                rng=rng,
+            )
+            fallback_mask = jnp.asarray(nonfinite_grad_mask_np)[:, None, None]
+            grad_effective_raw = jnp.where(fallback_mask, fd_grad_batch, grad_ad_raw)
+
+        grad_effective_raw_np = np.asarray(grad_effective_raw)
+        grad_effective_raw_nonfinite_counts_np = np.sum(
+            ~np.isfinite(grad_effective_raw_np.reshape((args.parallel_sims, -1))),
+            axis=1,
+        )
+        unresolved_grad_mask_np = grad_effective_raw_nonfinite_counts_np > 0
+        if args.fail_on_nonfinite_grad and np.any(unresolved_grad_mask_np):
+            bad_candidates = [int(i) for i in np.where(unresolved_grad_mask_np)[0].tolist()]
+            first_terms = {int(i): backward_first_terms[int(i)] for i in bad_candidates}
+            raise RuntimeError(
+                "Non-finite gradient detected after fallback; "
+                f"candidates={bad_candidates}, first_nonfinite_backward_term={first_terms}, "
+                f"fd_info={fd_info}"
+            )
+
+        grad_sources = ["ad"] * args.parallel_sims
+        fd_used_set = set(int(c) for c in fd_info.get("fd_used_candidates", []))
+        for cand in range(args.parallel_sims):
+            if cand in fd_used_set:
+                grad_sources[cand] = "fd" if not unresolved_grad_mask_np[cand] else "fd_nonfinite"
+            elif nonfinite_grad_mask_np[cand]:
+                grad_sources[cand] = "ad_nonfinite"
+
         reward_total = jnp.nan_to_num(reward_total_raw, nan=-1.0e6, posinf=1.0e6, neginf=-1.0e6)
         aux = {
             "rewards": jnp.nan_to_num(aux_raw["rewards"], nan=-1.0e6, posinf=1.0e6, neginf=-1.0e6),
@@ -554,7 +834,7 @@ def main() -> None:
             "levelset_xy_batch": jnp.nan_to_num(aux_raw["levelset_xy_batch"], nan=0.0, posinf=0.0, neginf=0.0),
             "theta_batch": jnp.nan_to_num(aux_raw["theta_batch"], nan=0.0, posinf=0.0, neginf=0.0),
         }
-        grad_batch = jnp.nan_to_num(grad_raw, nan=0.0, posinf=0.0, neginf=0.0)
+        grad_batch = jnp.nan_to_num(grad_effective_raw, nan=0.0, posinf=0.0, neginf=0.0)
 
         step_batch = args.learning_rate * grad_batch
         step_norms = jnp.linalg.norm(step_batch.reshape((args.parallel_sims, -1)), axis=1)
@@ -588,6 +868,17 @@ def main() -> None:
         max_abs_primitives_np = np.asarray(aux["max_abs_primitives"])
         end_time_np = np.asarray(aux["end_time"])
         grad_norms_np = np.asarray(jnp.linalg.norm(grad_batch.reshape((args.parallel_sims, -1)), axis=1))
+        grad_raw_nonfinite_counts_np = grad_ad_raw_nonfinite_counts_np
+        grad_unresolved_nonfinite_counts_np = grad_effective_raw_nonfinite_counts_np
+        grad_raw_norms_np = np.linalg.norm(
+            np.nan_to_num(
+                grad_effective_raw_np.reshape((args.parallel_sims, -1)),
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            ),
+            axis=1,
+        )
         step_norms_np = np.asarray(step_norms)
 
         should_save_shape = (it % args.save_every == 0) or (it == args.num_iters - 1)
@@ -625,6 +916,25 @@ def main() -> None:
                 "cd_nonfinite_count": int(cd_nonfinite_count_np[cand]),
                 "cl_nonfinite_count": int(cl_nonfinite_count_np[cand]),
                 "max_abs_primitives": float(max_abs_primitives_np[cand]),
+                "grad_raw_nonfinite_count": int(grad_raw_nonfinite_counts_np[cand]),
+                "grad_raw_norm_before_sanitize": float(grad_raw_norms_np[cand]),
+                "grad_unresolved_nonfinite_count": int(grad_unresolved_nonfinite_counts_np[cand]),
+                "grad_source": grad_sources[cand],
+                "fd_fallback_used": bool(cand in fd_used_set),
+                "fd_eval_count": int(fd_info["fd_eval_count_by_candidate"][cand]),
+                "fd_bad_eval_count": int(fd_info["fd_bad_eval_count_by_candidate"][cand]),
+                "first_nonfinite_backward_term": str(backward_first_terms[cand]),
+                "backward_reward_nonfinite_count": (
+                    int(backward_reward_nonfinite_counts[cand])
+                    if backward_reward_nonfinite_counts[cand] is not None
+                    else None
+                ),
+                "backward_cd_nonfinite_count": (
+                    int(backward_cd_nonfinite_counts[cand]) if backward_cd_nonfinite_counts[cand] is not None else None
+                ),
+                "backward_cl_nonfinite_count": (
+                    int(backward_cl_nonfinite_counts[cand]) if backward_cl_nonfinite_counts[cand] is not None else None
+                ),
                 "grad_norm": float(grad_norms_np[cand]),
                 "step_norm": float(step_norms_np[cand]),
                 "wall_seconds": elapsed,
@@ -653,6 +963,17 @@ def main() -> None:
                         row["cd_nonfinite_count"],
                         row["cl_nonfinite_count"],
                         row["max_abs_primitives"],
+                        row["grad_raw_nonfinite_count"],
+                        row["grad_raw_norm_before_sanitize"],
+                        row["grad_unresolved_nonfinite_count"],
+                        row["grad_source"],
+                        row["fd_fallback_used"],
+                        row["fd_eval_count"],
+                        row["fd_bad_eval_count"],
+                        row["first_nonfinite_backward_term"],
+                        row["backward_reward_nonfinite_count"],
+                        row["backward_cd_nonfinite_count"],
+                        row["backward_cl_nonfinite_count"],
                         row["grad_norm"],
                         row["step_norm"],
                         row["wall_seconds"],
@@ -677,6 +998,9 @@ def main() -> None:
                 "reward_best": float(np.max(rewards_np)),
                 "drag_mean": float(np.mean(cd_np)),
                 "lift_mean": float(np.mean(cl_np)),
+                "nonfinite_grad_candidates": float(np.sum(nonfinite_grad_mask_np)),
+                "fd_fallback_candidates": float(len(fd_used_set)),
+                "unresolved_nonfinite_grad_candidates": float(np.sum(unresolved_grad_mask_np)),
             }
             for cand in range(args.parallel_sims):
                 wb_payload[f"cand_{cand}/reward"] = float(rewards_np[cand])
