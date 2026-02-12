@@ -76,6 +76,11 @@ def maybe_apply_solver_precision_override(numerical_setup: Dict[str, Any], solve
     return num
 
 
+def finite_float_or_none(value: Any) -> Any:
+    value_f = float(value)
+    return value_f if np.isfinite(value_f) else None
+
+
 def maybe_make_initial_theta_batch(
     parallel_sims: int,
     seed: int,
@@ -270,6 +275,14 @@ def build_objective_batched(
     r_max: float,
     bezier_samples: int,
 ) -> callable:
+    def finite_mean(x: jax.Array, axis: int) -> Tuple[jax.Array, jax.Array]:
+        finite = jnp.isfinite(x)
+        valid_count = jnp.sum(finite, axis=axis)
+        total = jnp.sum(jnp.where(finite, x, 0.0), axis=axis)
+        mean = total / jnp.maximum(valid_count, 1)
+        mean = jnp.where(valid_count > 0, mean, jnp.nan)
+        return mean, valid_count
+
     def objective(theta_batch: jax.Array):
         theta_batch = jax.vmap(clamp_points_to_ring_jax, in_axes=(0, None, None))(theta_batch, r_min, r_max)
 
@@ -309,13 +322,37 @@ def build_objective_batched(
 
         ratio = cl / (jnp.abs(cd) + 1.0e-12)  # (B, T)
         half_idx = ratio.shape[1] // 2
-        rewards = jnp.mean(ratio[:, half_idx:], axis=1)
-        reward = jnp.sum(rewards)
+        ratio_second_half = ratio[:, half_idx:]
+        cd_second_half = cd[:, half_idx:]
+        cl_second_half = cl[:, half_idx:]
+
+        rewards, ratio_valid_count = finite_mean(ratio_second_half, axis=1)
+        mean_cd_second_half, cd_valid_count = finite_mean(cd_second_half, axis=1)
+        mean_cl_second_half, cl_valid_count = finite_mean(cl_second_half, axis=1)
+        rewards_for_objective = jnp.where(jnp.isfinite(rewards), rewards, 0.0)
+        reward = jnp.sum(rewards_for_objective)
+
+        primitives_nonfinite_count = jnp.sum(~jnp.isfinite(primitives_batch), axis=(1, 2, 3, 4, 5))
+        cd_nonfinite_count = jnp.sum(~jnp.isfinite(cd), axis=1)
+        cl_nonfinite_count = jnp.sum(~jnp.isfinite(cl), axis=1)
+        max_abs_primitives = jnp.max(
+            jnp.nan_to_num(jnp.abs(primitives_batch), nan=0.0, posinf=1.0e30, neginf=1.0e30),
+            axis=(1, 2, 3, 4, 5),
+        )
+
         aux = {
             "reward": reward,
             "rewards": rewards,
-            "mean_cd_second_half": jnp.mean(cd[:, half_idx:], axis=1),
-            "mean_cl_second_half": jnp.mean(cl[:, half_idx:], axis=1),
+            "mean_cd_second_half": mean_cd_second_half,
+            "mean_cl_second_half": mean_cl_second_half,
+            "ratio_valid_count_second_half": ratio_valid_count,
+            "cd_valid_count_second_half": cd_valid_count,
+            "cl_valid_count_second_half": cl_valid_count,
+            "ratio_total_count_second_half": jnp.full_like(ratio_valid_count, ratio_second_half.shape[1]),
+            "cd_nonfinite_count": cd_nonfinite_count,
+            "cl_nonfinite_count": cl_nonfinite_count,
+            "primitives_nonfinite_count": primitives_nonfinite_count,
+            "max_abs_primitives": max_abs_primitives,
             "end_time": times[:, -1],
             "levelset_xy_batch": levelset_xy_batch,
             "theta_batch": theta_batch,
@@ -470,8 +507,19 @@ def main() -> None:
                 "iter",
                 "candidate",
                 "reward",
+                "reward_raw",
                 "mean_cd_second_half",
+                "mean_cd_second_half_raw",
                 "mean_cl_second_half",
+                "mean_cl_second_half_raw",
+                "reward_is_finite",
+                "cd_is_finite",
+                "cl_is_finite",
+                "ratio_valid_fraction_second_half",
+                "primitives_nonfinite_count",
+                "cd_nonfinite_count",
+                "cl_nonfinite_count",
+                "max_abs_primitives",
                 "grad_norm",
                 "step_norm",
                 "wall_seconds",
@@ -490,17 +538,23 @@ def main() -> None:
     history = []
     for it in range(args.num_iters):
         t_start_iter = time.time()
-        (reward_total, aux), grad = value_and_grad(theta_batch)
-        reward_total = jnp.nan_to_num(reward_total, nan=-1.0e6, posinf=1.0e6, neginf=-1.0e6)
+        (reward_total_raw, aux_raw), grad_raw = value_and_grad(theta_batch)
+        reward_total = jnp.nan_to_num(reward_total_raw, nan=-1.0e6, posinf=1.0e6, neginf=-1.0e6)
         aux = {
-            "rewards": jnp.nan_to_num(aux["rewards"], nan=-1.0e6, posinf=1.0e6, neginf=-1.0e6),
-            "mean_cd_second_half": jnp.nan_to_num(aux["mean_cd_second_half"], nan=1.0e6, posinf=1.0e6, neginf=-1.0e6),
-            "mean_cl_second_half": jnp.nan_to_num(aux["mean_cl_second_half"], nan=0.0, posinf=1.0e6, neginf=-1.0e6),
-            "end_time": jnp.nan_to_num(aux["end_time"], nan=0.0, posinf=0.0, neginf=0.0),
-            "levelset_xy_batch": jnp.nan_to_num(aux["levelset_xy_batch"], nan=0.0, posinf=0.0, neginf=0.0),
-            "theta_batch": jnp.nan_to_num(aux["theta_batch"], nan=0.0, posinf=0.0, neginf=0.0),
+            "rewards": jnp.nan_to_num(aux_raw["rewards"], nan=-1.0e6, posinf=1.0e6, neginf=-1.0e6),
+            "mean_cd_second_half": jnp.nan_to_num(aux_raw["mean_cd_second_half"], nan=1.0e6, posinf=1.0e6, neginf=-1.0e6),
+            "mean_cl_second_half": jnp.nan_to_num(aux_raw["mean_cl_second_half"], nan=0.0, posinf=1.0e6, neginf=-1.0e6),
+            "ratio_valid_count_second_half": aux_raw["ratio_valid_count_second_half"],
+            "ratio_total_count_second_half": aux_raw["ratio_total_count_second_half"],
+            "cd_nonfinite_count": aux_raw["cd_nonfinite_count"],
+            "cl_nonfinite_count": aux_raw["cl_nonfinite_count"],
+            "primitives_nonfinite_count": aux_raw["primitives_nonfinite_count"],
+            "max_abs_primitives": jnp.nan_to_num(aux_raw["max_abs_primitives"], nan=1.0e30, posinf=1.0e30, neginf=1.0e30),
+            "end_time": jnp.nan_to_num(aux_raw["end_time"], nan=0.0, posinf=0.0, neginf=0.0),
+            "levelset_xy_batch": jnp.nan_to_num(aux_raw["levelset_xy_batch"], nan=0.0, posinf=0.0, neginf=0.0),
+            "theta_batch": jnp.nan_to_num(aux_raw["theta_batch"], nan=0.0, posinf=0.0, neginf=0.0),
         }
-        grad_batch = jnp.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0)
+        grad_batch = jnp.nan_to_num(grad_raw, nan=0.0, posinf=0.0, neginf=0.0)
 
         step_batch = args.learning_rate * grad_batch
         step_norms = jnp.linalg.norm(step_batch.reshape((args.parallel_sims, -1)), axis=1)
@@ -521,8 +575,17 @@ def main() -> None:
 
         theta_np_batch = np.asarray(theta_batch)
         rewards_np = np.asarray(aux["rewards"])
+        rewards_raw_np = np.asarray(aux_raw["rewards"])
         cd_np = np.asarray(aux["mean_cd_second_half"])
+        cd_raw_np = np.asarray(aux_raw["mean_cd_second_half"])
         cl_np = np.asarray(aux["mean_cl_second_half"])
+        cl_raw_np = np.asarray(aux_raw["mean_cl_second_half"])
+        ratio_valid_count_np = np.asarray(aux["ratio_valid_count_second_half"])
+        ratio_total_count_np = np.asarray(aux["ratio_total_count_second_half"])
+        cd_nonfinite_count_np = np.asarray(aux["cd_nonfinite_count"])
+        cl_nonfinite_count_np = np.asarray(aux["cl_nonfinite_count"])
+        primitives_nonfinite_count_np = np.asarray(aux["primitives_nonfinite_count"])
+        max_abs_primitives_np = np.asarray(aux["max_abs_primitives"])
         end_time_np = np.asarray(aux["end_time"])
         grad_norms_np = np.asarray(jnp.linalg.norm(grad_batch.reshape((args.parallel_sims, -1)), axis=1))
         step_norms_np = np.asarray(step_norms)
@@ -547,8 +610,21 @@ def main() -> None:
                 "iter": it,
                 "candidate": cand,
                 "reward": float(rewards_np[cand]),
+                "reward_raw": finite_float_or_none(rewards_raw_np[cand]),
                 "mean_cd_second_half": float(cd_np[cand]),
+                "mean_cd_second_half_raw": finite_float_or_none(cd_raw_np[cand]),
                 "mean_cl_second_half": float(cl_np[cand]),
+                "mean_cl_second_half_raw": finite_float_or_none(cl_raw_np[cand]),
+                "reward_is_finite": bool(np.isfinite(rewards_raw_np[cand])),
+                "cd_is_finite": bool(np.isfinite(cd_raw_np[cand])),
+                "cl_is_finite": bool(np.isfinite(cl_raw_np[cand])),
+                "ratio_valid_fraction_second_half": float(
+                    ratio_valid_count_np[cand] / max(float(ratio_total_count_np[cand]), 1.0)
+                ),
+                "primitives_nonfinite_count": int(primitives_nonfinite_count_np[cand]),
+                "cd_nonfinite_count": int(cd_nonfinite_count_np[cand]),
+                "cl_nonfinite_count": int(cl_nonfinite_count_np[cand]),
+                "max_abs_primitives": float(max_abs_primitives_np[cand]),
                 "grad_norm": float(grad_norms_np[cand]),
                 "step_norm": float(step_norms_np[cand]),
                 "wall_seconds": elapsed,
@@ -564,8 +640,19 @@ def main() -> None:
                         row["iter"],
                         row["candidate"],
                         row["reward"],
+                        row["reward_raw"],
                         row["mean_cd_second_half"],
+                        row["mean_cd_second_half_raw"],
                         row["mean_cl_second_half"],
+                        row["mean_cl_second_half_raw"],
+                        row["reward_is_finite"],
+                        row["cd_is_finite"],
+                        row["cl_is_finite"],
+                        row["ratio_valid_fraction_second_half"],
+                        row["primitives_nonfinite_count"],
+                        row["cd_nonfinite_count"],
+                        row["cl_nonfinite_count"],
+                        row["max_abs_primitives"],
                         row["grad_norm"],
                         row["step_norm"],
                         row["wall_seconds"],
@@ -601,10 +688,11 @@ def main() -> None:
             wandb_run.log(wb_payload, step=it)
 
         best_idx = int(np.argmax(rewards_np))
+        invalid_count = int(np.sum(~np.isfinite(rewards_raw_np)))
         print(
             f"[iter {it:03d}] sims={args.parallel_sims} "
             f"reward_mean={np.mean(rewards_np):.6f} reward_best={np.max(rewards_np):.6f} "
-            f"(cand={best_idx:03d}) t={elapsed:.2f}s"
+            f"(cand={best_idx:03d}) invalid_rewards={invalid_count}/{args.parallel_sims} t={elapsed:.2f}s"
         )
 
     rewards_last = np.asarray([h["reward"] for h in history[-args.parallel_sims:]], dtype=np.float64)
