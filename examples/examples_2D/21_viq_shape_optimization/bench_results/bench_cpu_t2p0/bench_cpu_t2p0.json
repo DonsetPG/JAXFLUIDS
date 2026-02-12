@@ -1,0 +1,179 @@
+{
+    "general": {
+        "case_name": "bench_cpu_t2p0",
+        "end_time": 2.0,
+        "save_path": "/Users/paulgarnier/github/phd/JAXFLUIDS/examples/examples_2D/21_viq_shape_optimization/bench_results",
+        "save_dt": 3.0
+    },
+    "domain": {
+        "x": {
+            "cells": 220,
+            "range": [
+                -10.0,
+                35.0
+            ],
+            "stretching": {
+                "type": "PIECEWISE",
+                "parameters": [
+                    {
+                        "type": "DECREASING",
+                        "lower_bound": -10.0,
+                        "upper_bound": -2.0,
+                        "cells": 50
+                    },
+                    {
+                        "type": "CONSTANT",
+                        "lower_bound": -2.0,
+                        "upper_bound": 6.0,
+                        "cells": 120
+                    },
+                    {
+                        "type": "INCREASING",
+                        "lower_bound": 6.0,
+                        "upper_bound": 35.0,
+                        "cells": 50
+                    }
+                ]
+            }
+        },
+        "y": {
+            "cells": 160,
+            "range": [
+                -15.0,
+                15.0
+            ],
+            "stretching": {
+                "type": "PIECEWISE",
+                "parameters": [
+                    {
+                        "type": "DECREASING",
+                        "lower_bound": -15.0,
+                        "upper_bound": -3.0,
+                        "cells": 35
+                    },
+                    {
+                        "type": "CONSTANT",
+                        "lower_bound": -3.0,
+                        "upper_bound": 3.0,
+                        "cells": 90
+                    },
+                    {
+                        "type": "INCREASING",
+                        "lower_bound": 3.0,
+                        "upper_bound": 15.0,
+                        "cells": 35
+                    }
+                ]
+            }
+        },
+        "z": {
+            "cells": 1,
+            "range": [
+                0.0,
+                1.0
+            ]
+        },
+        "decomposition": {
+            "split_x": 1,
+            "split_y": 1,
+            "split_z": 1
+        }
+    },
+    "boundary_conditions": {
+        "primitives": {
+            "east": {
+                "type": "ZEROGRADIENT"
+            },
+            "west": {
+                "type": "DIRICHLET",
+                "primitives_callable": {
+                    "rho": 1.0,
+                    "u": 1.0,
+                    "v": 0.0,
+                    "w": 0.0,
+                    "p": 25.0
+                }
+            },
+            "north": {
+                "type": "SYMMETRY"
+            },
+            "south": {
+                "type": "SYMMETRY"
+            },
+            "top": {
+                "type": "INACTIVE"
+            },
+            "bottom": {
+                "type": "INACTIVE"
+            }
+        },
+        "levelset": {
+            "east": {
+                "type": "ZEROGRADIENT"
+            },
+            "west": {
+                "type": "ZEROGRADIENT"
+            },
+            "north": {
+                "type": "SYMMETRY"
+            },
+            "south": {
+                "type": "SYMMETRY"
+            },
+            "top": {
+                "type": "INACTIVE"
+            },
+            "bottom": {
+                "type": "INACTIVE"
+            }
+        }
+    },
+    "initial_condition": {
+        "primitives": {
+            "rho": 1.0,
+            "u": 1.0,
+            "v": 0.0,
+            "w": 0.0,
+            "p": 25.0
+        },
+        "levelset": "lambda x,y: jnp.sqrt(x**2 + y**2) - (1.0 + 0.10*jnp.cos(jnp.arctan2(y, x) - 0.6) + 0.04*jnp.cos(2.0*jnp.arctan2(y, x) + 1.2))"
+    },
+    "material_properties": {
+        "equation_of_state": {
+            "model": "IdealGas",
+            "specific_heat_ratio": 1.4,
+            "specific_gas_constant": 1.0
+        },
+        "transport": {
+            "dynamic_viscosity": {
+                "model": "CUSTOM",
+                "value": 0.01
+            },
+            "bulk_viscosity": 0.0,
+            "thermal_conductivity": {
+                "model": "CUSTOM",
+                "value": 0.0
+            }
+        }
+    },
+    "nondimensionalization_parameters": {
+        "density_reference": 1.0,
+        "length_reference": 1.0,
+        "velocity_reference": 1.0,
+        "temperature_reference": 1.0
+    },
+    "output": {
+        "primitives": [
+            "density",
+            "velocity",
+            "pressure"
+        ],
+        "levelset": [
+            "levelset",
+            "volume_fraction"
+        ],
+        "miscellaneous": [
+            "vorticity"
+        ]
+    }
+}

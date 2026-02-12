@@ -1,0 +1,66 @@
+<?xml version="1.0" ?>
+        <!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>
+        <Xdmf Version="3.0">
+        <Domain>
+            <Grid Name="TimeSeries" GridType="Collection" CollectionType="Temporal">
+
+                <Grid Name="SpatialData_0.000000e+00" GridType="Uniform">
+                    <Time TimeType="Single" Value="0.000000e+00" />
+
+                    <Geometry Type="VXVYVZ">
+                        <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="221">data_0.0000000000.h5:domain/gridFX</DataItem>
+                        <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="161">data_0.0000000000.h5:domain/gridFY</DataItem>
+                        <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="2">data_0.0000000000.h5:domain/gridFZ</DataItem>
+                    </Geometry>
+                    <Topology Dimensions="221 161 2" Type="3DRectMesh"/>
+<Attribute Name="density" AttributeType="Scalar" Center="Cell">
+                <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="1 160 220">data_0.0000000000.h5:primitives/density</DataItem>
+            </Attribute>
+<Attribute Name="velocity" AttributeType="Vector" Center="Cell">
+            <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="1 160 220 2">data_0.0000000000.h5:primitives/velocity</DataItem>
+            </Attribute>
+<Attribute Name="pressure" AttributeType="Scalar" Center="Cell">
+                <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="1 160 220">data_0.0000000000.h5:primitives/pressure</DataItem>
+            </Attribute>
+<Attribute Name="vorticity" AttributeType="Vector" Center="Cell">
+            <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="1 160 220 1">data_0.0000000000.h5:miscellaneous/vorticity</DataItem>
+            </Attribute>
+<Attribute Name="levelset" AttributeType="Scalar" Center="Cell">
+                <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="1 160 220">data_0.0000000000.h5:levelset/levelset</DataItem>
+            </Attribute>
+<Attribute Name="volume_fraction" AttributeType="Scalar" Center="Cell">
+                <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="1 160 220">data_0.0000000000.h5:levelset/volume_fraction</DataItem>
+            </Attribute>
+</Grid>
+
+                <Grid Name="SpatialData_2.000364e+00" GridType="Uniform">
+                    <Time TimeType="Single" Value="2.000364e+00" />
+
+                    <Geometry Type="VXVYVZ">
+                        <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="221">data_2.0003640652.h5:domain/gridFX</DataItem>
+                        <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="161">data_2.0003640652.h5:domain/gridFY</DataItem>
+                        <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="2">data_2.0003640652.h5:domain/gridFZ</DataItem>
+                    </Geometry>
+                    <Topology Dimensions="221 161 2" Type="3DRectMesh"/>
+<Attribute Name="density" AttributeType="Scalar" Center="Cell">
+                <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="1 160 220">data_2.0003640652.h5:primitives/density</DataItem>
+            </Attribute>
+<Attribute Name="velocity" AttributeType="Vector" Center="Cell">
+            <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="1 160 220 2">data_2.0003640652.h5:primitives/velocity</DataItem>
+            </Attribute>
+<Attribute Name="pressure" AttributeType="Scalar" Center="Cell">
+                <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="1 160 220">data_2.0003640652.h5:primitives/pressure</DataItem>
+            </Attribute>
+<Attribute Name="vorticity" AttributeType="Vector" Center="Cell">
+            <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="1 160 220 1">data_2.0003640652.h5:miscellaneous/vorticity</DataItem>
+            </Attribute>
+<Attribute Name="levelset" AttributeType="Scalar" Center="Cell">
+                <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="1 160 220">data_2.0003640652.h5:levelset/levelset</DataItem>
+            </Attribute>
+<Attribute Name="volume_fraction" AttributeType="Scalar" Center="Cell">
+                <DataItem Format="HDF" NumberType="Float" Precision="4" Dimensions="1 160 220">data_2.0003640652.h5:levelset/volume_fraction</DataItem>
+            </Attribute>
+</Grid>
+</Grid>
+        </Domain>
+        </Xdmf>
